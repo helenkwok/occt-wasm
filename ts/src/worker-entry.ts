@@ -5,10 +5,16 @@
  */
 
 import * as Comlink from "comlink";
-import type { InitOptions } from "./types.js";
+import type { InitOptions, ShapeHandle } from "./types.js";
 import { OcctKernel } from "./index.js";
+import { unionAllPairwise } from "./union-all.js";
 
 let kernel: OcctKernel | null = null;
+
+function getKernel(): OcctKernel {
+    if (!kernel) throw new Error("OcctKernel not initialized — call init() first");
+    return kernel;
+}
 
 const api = {
     async init(options?: InitOptions) {
@@ -18,8 +24,10 @@ const api = {
         kernel = await OcctKernel.init(options);
     },
     get kernel() {
-        if (!kernel) throw new Error("OcctKernel not initialized — call init() first");
-        return Comlink.proxy(kernel);
+        return Comlink.proxy(getKernel());
+    },
+    unionAllPairwise(shapes: ShapeHandle[]) {
+        return unionAllPairwise(getKernel(), shapes);
     },
 };
 
