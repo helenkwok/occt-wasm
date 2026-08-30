@@ -1,6 +1,5 @@
 name: CI
 
-# Runs automatically on main pushes and pull requests; workflow_dispatch supports manual verification.
 on:
   push:
     branches: [main]
