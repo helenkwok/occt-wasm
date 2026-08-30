@@ -20,9 +20,9 @@ import {
 } from "occt-wasm/manufacturing-mesh";
 ```
 
-`weldMeshPositions()` uses a neighbouring-cell spatial search rather than simple coordinate rounding, so points within the requested tolerance can still weld when they fall on opposite spatial-hash cell boundaries. It removes triangles that collapse after welding.
+`weldMeshPositions()` uses a neighbouring-cell spatial search rather than simple coordinate rounding, so points within the requested tolerance can still weld when they fall on opposite spatial-hash cell boundaries. It removes triangles that collapse after welding and collinear/near-zero-area triangles at the requested tolerance.
 
-`analyzeManifoldEdges()` counts undirected edge use in an indexed triangle mesh. `prepareManufacturingMesh()` performs both steps and returns the welded mesh plus the topology analysis.
+`analyzeManifoldEdges()` counts undirected edge use and also records edge traversal direction. `prepareManufacturingMesh()` performs both steps and returns the welded mesh plus the topology analysis.
 
 ## Required post-process
 
@@ -32,13 +32,17 @@ For manufacturing export:
 2. weld vertices by position using a tolerance appropriate to output scale;
 3. remove/reject degenerate triangles created by welding;
 4. count undirected edge use after welding;
-5. require every edge in a closed component to be used exactly twice.
+5. require every edge in a closed component to be used exactly twice;
+6. require the two triangles sharing each manifold edge to traverse it in opposite directions.
 
 Interpretation:
 
 - edge use = 1: boundary/hole;
-- edge use = 2: manifold;
+- edge use = 2 with opposite traversal: consistently oriented manifold edge;
+- edge use = 2 with the same traversal direction: winding inconsistency;
 - edge use > 2: non-manifold.
+
+`isClosedManifold` checks the topological edge-use condition. `isClosedOrientedManifold` additionally requires consistent winding and is the stronger default for manufacturing export.
 
 ## Validation order
 
@@ -51,7 +55,8 @@ B-Rep: isValid + expected solid/component count + volume checks
              tessellate
                   |
                   v
-Mesh: finite coordinates + weld + no degenerates + manifold edge count
+Mesh: finite coordinates + weld + no degenerates
+                  + closed manifold + consistent winding
 ```
 
 The weld tolerance is a manufacturing-output policy and should not be written back into the source CAD/semantic model.
