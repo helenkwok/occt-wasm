@@ -1,5 +1,5 @@
-import { OcctWorker } from "../../../dist/worker.js";
-import { prepareManufacturingMesh } from "../../../dist/manufacturing-mesh.js";
+import { OcctWorker } from "../../../ts/dist/worker.js";
+import { prepareManufacturingMesh } from "../../../ts/dist/manufacturing-mesh.js";
 
 const log = document.getElementById("log");
 const result = document.getElementById("result");
