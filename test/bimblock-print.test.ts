@@ -58,6 +58,15 @@ function generalFuseAll(handles: number[]): number {
     }
 }
 
+function batchCut(base: number, tools: number[]): number {
+    const vector = handleVector(tools);
+    try {
+        return kernel.cutAll(base, vector);
+    } finally {
+        vector.delete();
+    }
+}
+
 function trueUnion(handles: number[]): number {
     // The helper targets the high-level TS OcctKernel. The raw Embind kernel
     // used by this regression has the same fuse/copy/release surface for these
@@ -66,6 +75,91 @@ function trueUnion(handles: number[]): number {
         kernel,
         handles as unknown as readonly ShapeHandle[],
     ) as unknown as number;
+}
+
+function copyMesh(mesh: any) {
+    const positions = new Float32Array(
+        Module.HEAPF32.buffer.slice(
+            mesh.getPositionsPtr(),
+            mesh.getPositionsPtr() + mesh.positionCount * 4,
+        ),
+    );
+    const indices = new Uint32Array(
+        Module.HEAPU32.buffer.slice(
+            mesh.getIndicesPtr(),
+            mesh.getIndicesPtr() + mesh.indexCount * 4,
+        ),
+    );
+    return { positions, indices };
+}
+
+/**
+ * Weld only by geometric position, which is appropriate for BIMBlock's 3MF
+ * manufacturing mesh: face normals/UV seams are irrelevant to the print mesh.
+ *
+ * occt-wasm tessellates each B-Rep face independently, so adjacent faces can
+ * contain duplicate boundary coordinates under different raw vertex indices.
+ */
+function weldAndAnalyze(
+    positions: Float32Array,
+    indices: Uint32Array,
+    tolerance: number,
+) {
+    const rawVertexCount = positions.length / 3;
+    const rawToWelded = new Uint32Array(rawVertexCount);
+    const keyToIndex = new Map<string, number>();
+    let weldedVertexCount = 0;
+
+    const quantize = (value: number) => Math.round(value / tolerance);
+
+    for (let i = 0; i < rawVertexCount; i++) {
+        const base = i * 3;
+        const key = `${quantize(positions[base]!)},${quantize(positions[base + 1]!)},${quantize(positions[base + 2]!)}`;
+        let welded = keyToIndex.get(key);
+        if (welded === undefined) {
+            welded = weldedVertexCount++;
+            keyToIndex.set(key, welded);
+        }
+        rawToWelded[i] = welded;
+    }
+
+    const edgeUse = new Map<string, number>();
+    let degenerateTriangles = 0;
+
+    const addEdge = (a: number, b: number) => {
+        const lo = Math.min(a, b);
+        const hi = Math.max(a, b);
+        const key = `${lo}:${hi}`;
+        edgeUse.set(key, (edgeUse.get(key) ?? 0) + 1);
+    };
+
+    for (let i = 0; i < indices.length; i += 3) {
+        const a = rawToWelded[indices[i]!]!;
+        const b = rawToWelded[indices[i + 1]!]!;
+        const c = rawToWelded[indices[i + 2]!]!;
+        if (a === b || b === c || c === a) {
+            degenerateTriangles++;
+            continue;
+        }
+        addEdge(a, b);
+        addEdge(b, c);
+        addEdge(c, a);
+    }
+
+    let boundaryEdges = 0;
+    let nonManifoldEdges = 0;
+    for (const count of edgeUse.values()) {
+        if (count === 1) boundaryEdges++;
+        if (count > 2) nonManifoldEdges++;
+    }
+
+    return {
+        rawVertexCount,
+        weldedVertexCount,
+        boundaryEdges,
+        nonManifoldEdges,
+        degenerateTriangles,
+    };
 }
 
 function buildArchitecturalCorner(scale = 1) {
@@ -78,10 +172,8 @@ function buildArchitecturalCorner(scale = 1) {
     // Tools deliberately extend beyond the full wall thickness so the result
     // is a real opening rather than a coplanar/sliver cut.
     const door = translatedBox(20 * scale, 10 * scale, 22 * scale, 30 * scale, -3 * scale, 0);
-    const withDoor = kernel.cut(fused, door);
-
     const window = translatedBox(10 * scale, 20 * scale, 10 * scale, -3 * scale, 40 * scale, 12 * scale);
-    const result = kernel.cut(withDoor, window);
+    const result = batchCut(fused, [door, window]);
 
     // Wall union: 120*4*30 + 4*100*30 - 4*4*30 = 25,920 mm^3.
     // Door removes 20*4*22 = 1,760; window removes 4*20*10 = 800.
@@ -111,23 +203,60 @@ describe("BIMBlock 3D-print Boolean semantics", () => {
         expect(kernel.subShapeCount(union, "solid")).toBe(1);
     });
 
-    it("fuses walls, cuts door/window openings, and tessellates the result", () => {
+    it("preserves disconnected printable components instead of creating a fake bridge", () => {
+        const a = kernel.makeBox(10, 10, 10);
+        const b = translatedBox(10, 10, 10, 30, 0, 0);
+        const union = trueUnion([a, b]);
+
+        expect(Math.abs(kernel.getVolume(union))).toBeCloseTo(2_000, 6);
+        expect(kernel.subShapeCount(union, "solid")).toBe(2);
+        expect(kernel.isValid(union)).toBe(true);
+    });
+
+    it("handles an architectural wall meeting a slab by exact face contact or tiny print overlap", () => {
+        const slab = kernel.makeBox(50, 50, 2);
+
+        const touchingWall = translatedBox(50, 4, 20, 0, 0, 2);
+        const exact = trueUnion([slab, touchingWall]);
+        expect(Math.abs(kernel.getVolume(exact))).toBeCloseTo(9_000, 6);
+        expect(kernel.subShapeCount(exact, "solid")).toBe(1);
+        expect(kernel.isValid(exact)).toBe(true);
+
+        kernel.releaseAll();
+
+        const slab2 = kernel.makeBox(50, 50, 2);
+        const overlappingWall = translatedBox(50, 4, 20, 0, 0, 1.98);
+        const overlapped = trueUnion([slab2, overlappingWall]);
+        // 0.02 mm overlap * 50 * 4 = 4 mm^3 duplicate volume removed.
+        expect(Math.abs(kernel.getVolume(overlapped))).toBeCloseTo(8_996, 6);
+        expect(kernel.subShapeCount(overlapped, "solid")).toBe(1);
+        expect(kernel.isValid(overlapped)).toBe(true);
+    });
+
+    it("fuses walls, batches door/window cuts, and tessellates the result", () => {
         const { result, expectedVolume } = buildArchitecturalCorner();
 
         expect(Math.abs(kernel.getVolume(result))).toBeCloseTo(expectedVolume, 3);
         expect(kernel.subShapeCount(result, "solid")).toBe(1);
+        expect(kernel.isValid(result)).toBe(true);
 
         const mesh = kernel.tessellate(result, 0.1, 0.5);
         expect(mesh.positionCount).toBeGreaterThan(0);
         expect(mesh.indexCount).toBeGreaterThan(0);
         expect(mesh.indexCount % 3).toBe(0);
 
-        const positions = new Float32Array(
-            Module.HEAPF32.buffer,
-            mesh.getPositionsPtr(),
-            mesh.positionCount,
-        );
+        const { positions, indices } = copyMesh(mesh);
         for (const value of positions) expect(Number.isFinite(value)).toBe(true);
+
+        // A B-Rep face mesh is intentionally face-local. Welding equal
+        // positions should collapse those seams into a closed manufacturing
+        // topology suitable for an indexed 3MF mesh.
+        const welded = weldAndAnalyze(positions, indices, 1e-4);
+        expect(welded.weldedVertexCount).toBeLessThan(welded.rawVertexCount);
+        expect(welded.degenerateTriangles).toBe(0);
+        expect(welded.boundaryEdges).toBe(0);
+        expect(welded.nonManifoldEdges).toBe(0);
+
         mesh.delete();
     });
 
@@ -140,6 +269,7 @@ describe("BIMBlock 3D-print Boolean semantics", () => {
             const actual = Math.abs(kernel.getVolume(result));
             const relativeError = Math.abs(actual - expectedVolume) / expectedVolume;
             expect(relativeError).toBeLessThan(1e-8);
+            expect(kernel.isValid(result)).toBe(true);
             kernel.releaseAll();
         }
     });
