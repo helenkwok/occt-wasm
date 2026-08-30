@@ -1,6 +1,6 @@
 # Manufacturing solid evaluation
 
-This branch evaluates `occt-wasm` as a solid-modelling stage for browser-based manufacturing and 3D-print workflows.
+This repository carries an experimental solid-modelling path for browser-based manufacturing and 3D-print workflows.
 
 ## Main finding
 
@@ -8,7 +8,16 @@ This branch evaluates `occt-wasm` as a solid-modelling stage for browser-based m
 
 For a printable connected component, prefer a true Boolean union before tessellation.
 
-The branch therefore adds `unionAllPairwise()` as a compatibility-safe helper rather than changing `fuseAll()` semantics.
+The package therefore exposes compatibility-safe helpers rather than changing `fuseAll()` semantics:
+
+```ts
+import {
+  unionAllPairwise,
+  unionAllPairwiseAsync,
+} from "occt-wasm/union-all";
+```
+
+Use `unionAllPairwise()` with `OcctKernel`. Use `unionAllPairwiseAsync()` with an asynchronous Worker/Comlink proxy such as `OcctWorker.kernel`. Both use a balanced tree of the existing binary `BRepAlgoAPI_Fuse`, preserve caller-owned input handles and release helper-owned intermediates eagerly.
 
 ```text
 semantic/model input
@@ -45,6 +54,8 @@ Avoid zero or collapsed dimensions before entering OCCT. Degenerate input is bet
 ## Worker boundary
 
 Run heavy B-Rep work in a dedicated Web Worker. The published browser WASM is single-threaded, so a Worker primarily provides UI responsiveness, memory/lifetime isolation and a recovery boundary after a fatal WASM trap.
+
+`unionAllPairwiseAsync()` deliberately awaits each Boolean call rather than issuing concurrent calls against one Worker. One OCCT Worker executes kernel operations on one thread; concurrent RPC submission would not make the Boolean itself multicore and would make ownership/error ordering harder to reason about.
 
 A short-lived kernel per manufacturing job is simpler to reason about than retaining shape handles in application state.
 
