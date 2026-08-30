@@ -17,3 +17,110 @@ concurrency:
 
 env:
   NODE_VERSION: "22"
+
+jobs:
+  lint:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: "1.95"
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ts/package-lock.json
+
+      - name: Install TS dependencies
+        run: cd ts && npm ci
+
+      # tsconfig.test.json resolves @types/node from the root install.
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
+      - name: TypeScript typecheck
+        run: cd ts && npx tsgo --noEmit
+
+      - name: TypeScript typecheck (tests)
+        run: npm run typecheck:tests
+
+      - name: Documented snippets compile
+        run: npm run typecheck:docs
+
+      - name: ESLint
+        run: cd ts && npx eslint src/
+
+      - name: Codegen drift check
+        run: |
+          cargo xtask codegen
+          cargo fmt --all
+          if ! git diff --exit-code facade/generated/ crate/src/kernel_generated.rs; then
+            echo "::error::Generated code is out of date. Run 'cargo xtask codegen && cargo fmt --all' and commit."
+            exit 1
+          fi
+          if [ -n "$(git ls-files --others --exclude-standard facade/generated/)" ]; then
+            echo "::error::Codegen produced untracked files in facade/generated/. Commit them."
+            exit 1
+          fi
+
+  build-test:
+    uses: ./.github/workflows/build-wasm.yml
+
+  browser-smoke:
+    name: Browser Smoke Test
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Download build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: occt-wasm-dist
+          path: dist/
+
+      - name: Copy WASM to ts/dist for test imports
+        run: mkdir -p ts/dist && cp dist/occt-wasm.js dist/occt-wasm.wasm ts/dist/
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright
+        run: npx playwright install chromium firefox --with-deps
+
+      # Firefox exposes WebGL only against a real display, so the demo specs
+      # need one; Mesa's llvmpipe supplies the driver behind it. Chromium is
+      # unaffected — it falls back to SwiftShader either way.
+      - name: Install virtual display + software GL
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils
+
+      # xvfb-run sets DISPLAY, which flips the Firefox project to headed
+      # (playwright.config.ts). Without it the demo specs fail rather than skip,
+      # so a broken display setup cannot quietly cost us the coverage.
+      - name: Run browser smoke test
+        run: xvfb-run -a --server-args="-screen 0 1280x1024x24" npx playwright test
