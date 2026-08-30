@@ -8,6 +8,22 @@ A valid B-Rep and a valid indexed manufacturing mesh are related but distinct re
 
 This is useful for face-specific normals and UV seams, but a closed indexed manufacturing mesh should not rely on index identity from the raw tessellation.
 
+## Reusable TypeScript helpers
+
+The package exposes the post-process at:
+
+```ts
+import {
+  weldMeshPositions,
+  analyzeManifoldEdges,
+  prepareManufacturingMesh,
+} from "occt-wasm/manufacturing-mesh";
+```
+
+`weldMeshPositions()` uses a neighbouring-cell spatial search rather than simple coordinate rounding, so points within the requested tolerance can still weld when they fall on opposite spatial-hash cell boundaries. It removes triangles that collapse after welding.
+
+`analyzeManifoldEdges()` counts undirected edge use in an indexed triangle mesh. `prepareManufacturingMesh()` performs both steps and returns the welded mesh plus the topology analysis.
+
 ## Required post-process
 
 For manufacturing export:
