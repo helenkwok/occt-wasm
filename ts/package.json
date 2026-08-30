@@ -16,6 +16,10 @@
       "import": "./dist/union-all.js",
       "types": "./dist/union-all.d.ts"
     },
+    "./manufacturing-mesh": {
+      "import": "./dist/manufacturing-mesh.js",
+      "types": "./dist/manufacturing-mesh.d.ts"
+    },
     "./dist/occt-wasm.js": "./dist/occt-wasm.js",
     "./dist/occt-wasm.wasm": "./dist/occt-wasm.wasm"
   },
