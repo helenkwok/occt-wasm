@@ -8,6 +8,7 @@
     "build:occt": "cargo xtask build-occt",
     "test": "cd ts && npx vitest run",
     "test:bundler": "node scripts/bundler-smoke.mjs",
+    "test:browser:prepare": "node scripts/build-worker-browser-smoke.mjs",
     "lint": "cd ts && npx eslint src/",
     "typecheck": "cd ts && npx tsgo --noEmit",
     "typecheck:tests": "cd ts && npx tsgo --noEmit -p ../tsconfig.test.json",
