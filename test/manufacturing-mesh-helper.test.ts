@@ -39,12 +39,21 @@ describe("manufacturing mesh helpers", () => {
         expect(result.weldedVertexCount).toBe(8);
         expect(result.removedDegenerateTriangles).toBe(0);
         expect(result.indices).toHaveLength(36);
+        expect(result.analysis.triangleCount).toBe(12);
         expect(result.analysis.boundaryEdges).toBe(0);
         expect(result.analysis.nonManifoldEdges).toBe(0);
         expect(result.analysis.inconsistentWindingEdges).toBe(0);
         expect(result.analysis.manifoldEdges).toBe(18);
         expect(result.analysis.isClosedManifold).toBe(true);
         expect(result.analysis.isClosedOrientedManifold).toBe(true);
+    });
+
+    it("does not classify an empty mesh as a closed manifold", () => {
+        const analysis = analyzeManifoldEdges(new Uint32Array());
+        expect(analysis.triangleCount).toBe(0);
+        expect(analysis.edgeCount).toBe(0);
+        expect(analysis.isClosedManifold).toBe(false);
+        expect(analysis.isClosedOrientedManifold).toBe(false);
     });
 
     it("welds points within tolerance even across adjacent hash cells", () => {
@@ -81,6 +90,7 @@ describe("manufacturing mesh helpers", () => {
 
     it("classifies an open triangle mesh by boundary edges", () => {
         const analysis = analyzeManifoldEdges(Uint32Array.from([0, 1, 2]));
+        expect(analysis.triangleCount).toBe(1);
         expect(analysis.edgeCount).toBe(3);
         expect(analysis.boundaryEdges).toBe(3);
         expect(analysis.nonManifoldEdges).toBe(0);
