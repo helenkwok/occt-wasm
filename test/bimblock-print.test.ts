@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import { unionAllPairwise } from "../ts/src/union-all.ts";
+import type { ShapeHandle } from "../ts/src/index.ts";
 
 // BIMBlock-shaped regression probes for the 3D-print path.
 // The print derivative is expressed in millimetres and Z-up before it reaches
@@ -61,7 +62,10 @@ function trueUnion(handles: number[]): number {
     // The helper targets the high-level TS OcctKernel. The raw Embind kernel
     // used by this regression has the same fuse/copy/release surface for these
     // methods, so the cast lets the same implementation exercise real WASM.
-    return unionAllPairwise(kernel, handles as never) as unknown as number;
+    return unionAllPairwise(
+        kernel,
+        handles as unknown as readonly ShapeHandle[],
+    ) as unknown as number;
 }
 
 function buildArchitecturalCorner(scale = 1) {
