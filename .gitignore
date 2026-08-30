@@ -43,3 +43,4 @@ examples/node-cli/multiview.svg
 # Playwright
 test-results/
 playwright-report/
+test/browser/worker-dist/
