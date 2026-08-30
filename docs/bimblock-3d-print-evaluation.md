@@ -61,6 +61,13 @@ This test should stay in the fork while BIMBlock evaluates new upstream versions
 It is deliberately small enough to be a regression tripwire, not a performance
 benchmark.
 
+`examples/node-cli/bimblock-print-probe.mjs` is a separate timing probe. It builds
+four room walls, batches them through `fuseAll`, cuts four door/window tools with
+`cutAll`, tessellates once, and reports initialization, boolean, and tessellation
+times at 1x and 10x geometry magnitude. It should be used to compare upstream
+versions on the workload BIMBlock actually cares about rather than relying only
+on generic CAD benchmarks.
+
 ## Integration guidance for BIMBlock
 
 ### Use print millimetres as OCCT model units
@@ -89,6 +96,27 @@ OCCT is valuable here for B-Rep construction/booleans and tessellation. BIMBlock
 already owns the print-product concerns (3MF metadata, scale, naming, Z-up output,
 future IFCX revision metadata), so there is no need to make OCCT the file-format
 owner.
+
+### BIMBlock Vite integration gap
+
+The current BIMBlock `vite.config.ts` does not yet contain the configuration
+recommended by `occt-wasm` for Vite:
+
+```ts
+optimizeDeps: {
+  exclude: ["occt-wasm"],
+},
+build: {
+  target: "esnext",
+},
+```
+
+Add those settings only when the experimental backend is integrated. BIMBlock's
+TanStack Start app is prerendered and deployed as static client assets, so the
+OCCT module must remain client/Worker-only. Prefer an explicit emitted WASM URL or
+pre-fetched `ArrayBuffer` passed to the Worker if automatic co-location is not
+preserved by the production build; do not let SSR/server evaluation instantiate
+the kernel.
 
 ## Upstream caveats to track
 
@@ -151,6 +179,11 @@ shipping.
 - The auxiliary-sweep scale failure (#255) is closed/fixed and verified by the
   reporter on 4.3.0.
 
+At the time of this evaluation, the upstream repository search returned no open
+issues and no open pull requests. That does not remove the need to watch the
+underlying OCCT fork/submodule and new upstream releases; the performance caveat
+above is an accepted trade-off rather than an open ticket.
+
 ## Recommendation
 
 Proceed with an **experimental OCCT print backend** behind a feature flag:
@@ -164,4 +197,4 @@ Proceed with an **experimental OCCT print backend** behind a feature flag:
 7. compare output and timing on representative cottage, multi-storey, and dense
    opening cases before making OCCT the default.
 
-The fork regression test is the first guard for that experiment.
+The fork regression test and timing probe are the first guards for that experiment.
