@@ -8,7 +8,7 @@ import {
 function cubeFaceLocalMesh() {
     // A unit cube represented the way a face-local CAD tessellator often emits
     // it: four unique vertices per face, so the 8 geometric corners appear as
-    // 24 raw vertices.
+    // 24 raw vertices. Face winding points outward on all six sides.
     const positions = Float32Array.from([
         // +X
         1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1,
@@ -32,7 +32,7 @@ function cubeFaceLocalMesh() {
 }
 
 describe("manufacturing mesh helpers", () => {
-    it("welds a face-local cube to 8 geometric vertices and a closed manifold", () => {
+    it("welds a face-local cube to 8 geometric vertices and a closed oriented manifold", () => {
         const result = prepareManufacturingMesh(cubeFaceLocalMesh(), 1e-6);
 
         expect(result.rawVertexCount).toBe(24);
@@ -41,8 +41,10 @@ describe("manufacturing mesh helpers", () => {
         expect(result.indices).toHaveLength(36);
         expect(result.analysis.boundaryEdges).toBe(0);
         expect(result.analysis.nonManifoldEdges).toBe(0);
+        expect(result.analysis.inconsistentWindingEdges).toBe(0);
         expect(result.analysis.manifoldEdges).toBe(18);
         expect(result.analysis.isClosedManifold).toBe(true);
+        expect(result.analysis.isClosedOrientedManifold).toBe(true);
     });
 
     it("welds points within tolerance even across adjacent hash cells", () => {
@@ -62,12 +64,39 @@ describe("manufacturing mesh helpers", () => {
         expect(welded.indices).toHaveLength(0);
     });
 
+    it("removes a collinear zero-area triangle even when its vertices remain distinct", () => {
+        const welded = weldMeshPositions({
+            positions: Float32Array.from([
+                0, 0, 0,
+                1, 0, 0,
+                2, 0, 0,
+            ]),
+            indices: Uint32Array.from([0, 1, 2]),
+        }, 1e-3);
+
+        expect(welded.weldedVertexCount).toBe(3);
+        expect(welded.removedDegenerateTriangles).toBe(1);
+        expect(welded.indices).toHaveLength(0);
+    });
+
     it("classifies an open triangle mesh by boundary edges", () => {
         const analysis = analyzeManifoldEdges(Uint32Array.from([0, 1, 2]));
         expect(analysis.edgeCount).toBe(3);
         expect(analysis.boundaryEdges).toBe(3);
         expect(analysis.nonManifoldEdges).toBe(0);
+        expect(analysis.inconsistentWindingEdges).toBe(0);
         expect(analysis.isClosedManifold).toBe(false);
+        expect(analysis.isClosedOrientedManifold).toBe(false);
+    });
+
+    it("detects inconsistent winding when two triangles traverse a shared edge the same way", () => {
+        const analysis = analyzeManifoldEdges(Uint32Array.from([
+            0, 1, 2,
+            0, 1, 3,
+        ]));
+
+        expect(analysis.inconsistentWindingEdges).toBe(1);
+        expect(analysis.isClosedOrientedManifold).toBe(false);
     });
 
     it("detects an edge shared by more than two triangles", () => {
@@ -79,6 +108,7 @@ describe("manufacturing mesh helpers", () => {
 
         expect(analysis.nonManifoldEdges).toBe(1);
         expect(analysis.isClosedManifold).toBe(false);
+        expect(analysis.isClosedOrientedManifold).toBe(false);
     });
 
     it("rejects malformed arrays, invalid indices, non-finite positions, and bad tolerance", () => {
