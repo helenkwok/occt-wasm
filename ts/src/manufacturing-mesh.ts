@@ -16,7 +16,9 @@ export interface ManifoldAnalysis {
     boundaryEdges: number;
     manifoldEdges: number;
     nonManifoldEdges: number;
+    inconsistentWindingEdges: number;
     isClosedManifold: boolean;
+    isClosedOrientedManifold: boolean;
 }
 
 export interface ManufacturingMeshResult extends WeldedMesh {
@@ -33,6 +35,27 @@ function cellKey(x: number, y: number, z: number, tolerance: number): string {
     return `${Math.floor(x / tolerance)},${Math.floor(y / tolerance)},${Math.floor(z / tolerance)}`;
 }
 
+function triangleDoubleAreaSquared(
+    positions: readonly number[],
+    a: number,
+    b: number,
+    c: number,
+): number {
+    const ao = a * 3;
+    const bo = b * 3;
+    const co = c * 3;
+    const abx = positions[bo]! - positions[ao]!;
+    const aby = positions[bo + 1]! - positions[ao + 1]!;
+    const abz = positions[bo + 2]! - positions[ao + 2]!;
+    const acx = positions[co]! - positions[ao]!;
+    const acy = positions[co + 1]! - positions[ao + 1]!;
+    const acz = positions[co + 2]! - positions[ao + 2]!;
+    const cx = aby * acz - abz * acy;
+    const cy = abz * acx - abx * acz;
+    const cz = abx * acy - aby * acx;
+    return cx * cx + cy * cy + cz * cz;
+}
+
 /**
  * Weld coincident/near-coincident mesh vertices by position.
  *
@@ -43,7 +66,8 @@ function cellKey(x: number, y: number, z: number, tolerance: number): string {
  *
  * A small spatial hash is used instead of simple coordinate quantisation so two
  * points within `tolerance` still weld when they fall on opposite grid-cell
- * boundaries. Triangles that collapse after welding are removed.
+ * boundaries. Triangles that collapse after welding, or whose post-weld area is
+ * effectively zero at the requested tolerance, are removed.
  */
 export function weldMeshPositions(
     mesh: Pick<Mesh, "positions" | "indices"> | IndexedPositionMesh,
@@ -117,6 +141,7 @@ export function weldMeshPositions(
 
     const weldedIndices: number[] = [];
     let removedDegenerateTriangles = 0;
+    const areaThresholdSquared = toleranceSquared * toleranceSquared;
 
     for (let i = 0; i < mesh.indices.length; i += 3) {
         const rawA = mesh.indices[i]!;
@@ -129,7 +154,12 @@ export function weldMeshPositions(
         const a = remap[rawA]!;
         const b = remap[rawB]!;
         const c = remap[rawC]!;
-        if (a === b || b === c || c === a) {
+        if (
+            a === b ||
+            b === c ||
+            c === a ||
+            triangleDoubleAreaSquared(weldedPositions, a, b, c) <= areaThresholdSquared
+        ) {
             removedDegenerateTriangles++;
             continue;
         }
@@ -146,23 +176,29 @@ export function weldMeshPositions(
 }
 
 /**
- * Analyze undirected triangle-edge usage in an indexed mesh.
+ * Analyze triangle-edge usage in an indexed mesh.
  *
  * For a closed 2-manifold triangle mesh every undirected edge is referenced by
  * exactly two triangles. One use indicates a boundary/hole; more than two uses
- * indicates a non-manifold edge.
+ * indicates a non-manifold edge. For a consistently oriented closed mesh, the
+ * two triangles sharing an edge must traverse that edge in opposite directions.
  */
 export function analyzeManifoldEdges(indices: Uint32Array): ManifoldAnalysis {
     if (indices.length % 3 !== 0) {
         throw new RangeError("mesh indices length must be divisible by 3");
     }
 
-    const edgeUse = new Map<string, number>();
+    type EdgeUse = { count: number; forward: number; reverse: number };
+    const edgeUse = new Map<string, EdgeUse>();
     const addEdge = (a: number, b: number): void => {
         const low = Math.min(a, b);
         const high = Math.max(a, b);
         const key = `${low}:${high}`;
-        edgeUse.set(key, (edgeUse.get(key) ?? 0) + 1);
+        const stats = edgeUse.get(key) ?? { count: 0, forward: 0, reverse: 0 };
+        stats.count++;
+        if (a === low && b === high) stats.forward++;
+        else stats.reverse++;
+        edgeUse.set(key, stats);
     };
 
     for (let i = 0; i < indices.length; i += 3) {
@@ -178,18 +214,27 @@ export function analyzeManifoldEdges(indices: Uint32Array): ManifoldAnalysis {
     let boundaryEdges = 0;
     let manifoldEdges = 0;
     let nonManifoldEdges = 0;
-    for (const count of edgeUse.values()) {
-        if (count === 1) boundaryEdges++;
-        else if (count === 2) manifoldEdges++;
-        else if (count > 2) nonManifoldEdges++;
+    let inconsistentWindingEdges = 0;
+    for (const stats of edgeUse.values()) {
+        if (stats.count === 1) {
+            boundaryEdges++;
+        } else if (stats.count === 2) {
+            manifoldEdges++;
+            if (stats.forward !== 1 || stats.reverse !== 1) inconsistentWindingEdges++;
+        } else if (stats.count > 2) {
+            nonManifoldEdges++;
+        }
     }
 
+    const isClosedManifold = boundaryEdges === 0 && nonManifoldEdges === 0;
     return {
         edgeCount: edgeUse.size,
         boundaryEdges,
         manifoldEdges,
         nonManifoldEdges,
-        isClosedManifold: boundaryEdges === 0 && nonManifoldEdges === 0,
+        inconsistentWindingEdges,
+        isClosedManifold,
+        isClosedOrientedManifold: isClosedManifold && inconsistentWindingEdges === 0,
     };
 }
 
