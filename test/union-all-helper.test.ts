@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { unionAllPairwise } from "../ts/src/union-all.ts";
+import {
+    unionAllPairwise,
+    unionAllPairwiseAsync,
+    type AsyncUnionKernel,
+} from "../ts/src/union-all.ts";
 import type { OcctKernel, ShapeHandle } from "../ts/src/index.ts";
 
 const shape = (id: number) => id as ShapeHandle;
@@ -25,6 +29,31 @@ class FakeKernel {
     }
 
     release(input: ShapeHandle): void {
+        this.released.push(input);
+    }
+}
+
+class FakeAsyncKernel implements AsyncUnionKernel {
+    next = 100;
+    readonly fuseCalls: Array<[ShapeHandle, ShapeHandle]> = [];
+    readonly released: ShapeHandle[] = [];
+    readonly copied: ShapeHandle[] = [];
+    failOnFuseCall: number | undefined;
+
+    async fuse(a: ShapeHandle, b: ShapeHandle): Promise<ShapeHandle> {
+        this.fuseCalls.push([a, b]);
+        if (this.failOnFuseCall === this.fuseCalls.length) {
+            throw new Error(`synthetic async fuse failure ${this.fuseCalls.length}`);
+        }
+        return shape(this.next++);
+    }
+
+    async copy(input: ShapeHandle): Promise<ShapeHandle> {
+        this.copied.push(input);
+        return shape(this.next++);
+    }
+
+    async release(input: ShapeHandle): Promise<void> {
         this.released.push(input);
     }
 }
@@ -82,5 +111,51 @@ describe("unionAllPairwise ownership", () => {
         expect(fake.fuseCalls).toHaveLength(0);
         expect(fake.released).toHaveLength(0);
         expect(fake.copied).toHaveLength(0);
+    });
+});
+
+describe("unionAllPairwiseAsync ownership", () => {
+    it("preserves the same balanced pairing and input ownership over async RPC", async () => {
+        const fake = new FakeAsyncKernel();
+        const inputs = [1, 2, 3, 4, 5].map(shape);
+
+        const result = await unionAllPairwiseAsync(fake, inputs);
+
+        expect(result).toBe(shape(103));
+        expect(fake.fuseCalls).toEqual([
+            [shape(1), shape(2)],
+            [shape(3), shape(4)],
+            [shape(100), shape(101)],
+            [shape(102), shape(5)],
+        ]);
+        expect(fake.released).toEqual([shape(100), shape(101), shape(102)]);
+        for (const input of inputs) expect(fake.released).not.toContain(input);
+    });
+
+    it("cleans up helper-owned async intermediates after a failure", async () => {
+        const fake = new FakeAsyncKernel();
+        fake.failOnFuseCall = 2;
+
+        await expect(
+            unionAllPairwiseAsync(fake, [shape(1), shape(2), shape(3), shape(4)]),
+        ).rejects.toThrow("synthetic async fuse failure 2");
+
+        expect(fake.released).toEqual([shape(100)]);
+        expect(fake.released).not.toContain(shape(1));
+        expect(fake.released).not.toContain(shape(2));
+        expect(fake.released).not.toContain(shape(3));
+        expect(fake.released).not.toContain(shape(4));
+    });
+
+    it("copies one input and rejects empty async input", async () => {
+        const fake = new FakeAsyncKernel();
+        await expect(unionAllPairwiseAsync(fake, [shape(9)])).resolves.toBe(shape(100));
+        expect(fake.copied).toEqual([shape(9)]);
+
+        const untouched = new FakeAsyncKernel();
+        await expect(unionAllPairwiseAsync(untouched, [])).rejects.toThrow(RangeError);
+        expect(untouched.fuseCalls).toHaveLength(0);
+        expect(untouched.released).toHaveLength(0);
+        expect(untouched.copied).toHaveLength(0);
     });
 });

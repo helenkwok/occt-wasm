@@ -173,6 +173,12 @@ export interface OcctWorkerProxy {
     describe(shape: ShapeHandle): Promise<string>;
 }
 
+interface OcctWorkerRemoteApi {
+    init(options?: InitOptions): Promise<void>;
+    kernel: OcctWorkerProxy;
+    unionAllPairwise(shapes: ShapeHandle[]): Promise<ShapeHandle>;
+}
+
 /**
  * Web Worker wrapper for OcctKernel. Provides the same API surface
  * but every operation runs off the main thread.
@@ -180,10 +186,16 @@ export interface OcctWorkerProxy {
 export class OcctWorker {
     readonly #worker: Worker;
     readonly #proxy: OcctWorkerProxy;
+    readonly #remote: Comlink.Remote<OcctWorkerRemoteApi>;
 
-    private constructor(worker: Worker, proxy: OcctWorkerProxy) {
+    private constructor(
+        worker: Worker,
+        proxy: OcctWorkerProxy,
+        remote: Comlink.Remote<OcctWorkerRemoteApi>,
+    ) {
         this.#worker = worker;
         this.#proxy = proxy;
+        this.#remote = remote;
     }
 
     /**
@@ -206,22 +218,25 @@ export class OcctWorker {
             { type: "module" },
         );
 
-        const remote = Comlink.wrap<{
-            init(options?: InitOptions): Promise<void>;
-            kernel: OcctWorkerProxy;
-        }>(worker);
+        const remote = Comlink.wrap<OcctWorkerRemoteApi>(worker);
 
         // Initialize the kernel inside the worker
         await remote.init(options ? { wasm: options.wasm, wasmUrl: options.wasmUrl, wasmPath: options.wasmPath } : undefined);
 
         const proxy = await remote.kernel;
-        return new OcctWorker(worker, proxy);
+        return new OcctWorker(worker, proxy, remote);
     }
 
     /** Access the proxied kernel methods. */
     get kernel(): OcctWorkerProxy {
         return this.#proxy;
     }
+
+    /**
+     * Compute a true Boolean union entirely inside the worker in a single RPC.
+     * This avoids transferring intermediate handles across the Comlink boundary.
+     */
+    unionAllPairwise(shapes: ShapeHandle[]) { return this.#remote.unionAllPairwise(shapes); }
 
     // Delegate commonly used methods directly for convenience
     makeBox(dx: number, dy: number, dz: number) { return this.#proxy.makeBox(dx, dy, dz); }
