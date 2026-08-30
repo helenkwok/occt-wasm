@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolve } from "node:path";
+import { unionAllPairwise } from "../ts/src/union-all.ts";
 
 // BIMBlock-shaped regression probes for the 3D-print path.
 // The print derivative is expressed in millimetres and Z-up before it reaches
@@ -56,30 +57,11 @@ function generalFuseAll(handles: number[]): number {
     }
 }
 
-/**
- * A true Boolean union built only from the public binary fuse primitive.
- *
- * Keep this test-local for now. It is deliberately balanced rather than a long
- * left fold so a storey with many walls has logarithmic boolean depth. The
- * production candidate should eventually be a native n-ary union API.
- */
-function balancedTrueUnion(handles: number[]): number {
-    if (handles.length === 0) throw new Error("balancedTrueUnion needs at least one shape");
-    if (handles.length === 1) return kernel.copy(handles[0]);
-
-    let level = [...handles];
-    while (level.length > 1) {
-        const next: number[] = [];
-        for (let i = 0; i < level.length; i += 2) {
-            if (i + 1 >= level.length) {
-                next.push(level[i]);
-            } else {
-                next.push(kernel.fuse(level[i], level[i + 1]));
-            }
-        }
-        level = next;
-    }
-    return level[0];
+function trueUnion(handles: number[]): number {
+    // The helper targets the high-level TS OcctKernel. The raw Embind kernel
+    // used by this regression has the same fuse/copy/release surface for these
+    // methods, so the cast lets the same implementation exercise real WASM.
+    return unionAllPairwise(kernel, handles as never) as unknown as number;
 }
 
 function buildArchitecturalCorner(scale = 1) {
@@ -87,7 +69,7 @@ function buildArchitecturalCorner(scale = 1) {
     // so the Boolean union must collapse the duplicate volume.
     const wallX = translatedBox(120 * scale, 4 * scale, 30 * scale, 0, 0, 0);
     const wallY = translatedBox(4 * scale, 100 * scale, 30 * scale, 0, 0, 0);
-    const fused = balancedTrueUnion([wallX, wallY]);
+    const fused = trueUnion([wallX, wallY]);
 
     // Tools deliberately extend beyond the full wall thickness so the result
     // is a real opening rather than a coplanar/sliver cut.
@@ -112,7 +94,7 @@ describe("BIMBlock 3D-print Boolean semantics", () => {
         const b = translatedBox(20, 10, 10, 10, 0, 0);
 
         const general = generalFuseAll([a, b]);
-        const union = balancedTrueUnion([a, b]);
+        const union = trueUnion([a, b]);
         const expectedUnionVolume = 30 * 10 * 10;
 
         expect(Math.abs(kernel.getVolume(general))).toBeCloseTo(expectedUnionVolume, 6);
