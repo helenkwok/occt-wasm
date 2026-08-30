@@ -20,6 +20,7 @@ const api = {
     async init(options?: InitOptions) {
         if (kernel) {
             kernel[Symbol.dispose]();
+            kernel = null;
         }
         kernel = await OcctKernel.init(options);
     },
