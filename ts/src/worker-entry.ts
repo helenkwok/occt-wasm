@@ -19,7 +19,7 @@ function getKernel(): OcctKernel {
 const api = {
     async init(options?: InitOptions) {
         if (kernel) {
-            kernel.releaseAll();
+            kernel[Symbol.dispose]();
         }
         kernel = await OcctKernel.init(options);
     },
