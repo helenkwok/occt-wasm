@@ -2,9 +2,13 @@
 /**
  * BIMBlock 3D-print solid-kernel probe.
  *
- * Builds a small room from architectural wall solids, fuses them, cuts four
- * openings in one batch, and tessellates the final B-Rep. Geometry is Z-up and
- * expressed in millimetres, matching the intended BIMBlock manufacturing path.
+ * Builds a small room from architectural wall solids and compares occt-wasm's
+ * current `fuseAll` (General Fuse / split cells) with a balanced true Boolean
+ * union built from `fuse`. The true union is then cut with four openings and
+ * tessellated once.
+ *
+ * Geometry is Z-up and expressed in millimetres, matching the intended
+ * BIMBlock manufacturing path.
  *
  * Build occt-wasm first, then run:
  *   node examples/node-cli/bimblock-print-probe.mjs
@@ -39,7 +43,7 @@ function handleVector(handles) {
     return vector;
 }
 
-function fuseAll(handles) {
+function generalFuseAll(handles) {
     const vector = handleVector(handles);
     try {
         return kernel.fuseAll(vector);
@@ -57,7 +61,26 @@ function cutAll(base, tools) {
     }
 }
 
+function balancedTrueUnion(handles) {
+    if (handles.length === 0) throw new Error("balancedTrueUnion needs at least one shape");
+    if (handles.length === 1) return kernel.copy(handles[0]);
+
+    let level = [...handles];
+    while (level.length > 1) {
+        const next = [];
+        for (let i = 0; i < level.length; i += 2) {
+            if (i + 1 >= level.length) next.push(level[i]);
+            else next.push(kernel.fuse(level[i], level[i + 1]));
+        }
+        level = next;
+    }
+    return level[0];
+}
+
 function buildRoom(scale) {
+    const mark = kernel.checkpoint();
+    const shapeCountBefore = kernel.getShapeCount();
+
     const walls = [
         translatedBox(120 * scale, 4 * scale, 30 * scale, 0, 0, 0),
         translatedBox(120 * scale, 4 * scale, 30 * scale, 0, 96 * scale, 0),
@@ -65,9 +88,22 @@ function buildRoom(scale) {
         translatedBox(4 * scale, 100 * scale, 30 * scale, 116 * scale, 0, 0),
     ];
 
-    const fuseStart = performance.now();
-    const shell = fuseAll(walls);
-    const fuseMs = performance.now() - fuseStart;
+    // Current occt-wasm fuseAll uses BRepAlgoAPI_BuilderAlgo (General Fuse).
+    // Measure it because it is a useful upstream baseline, but do not feed it
+    // into the manufacturing path: it retains split cells/internal boundaries.
+    const generalStart = performance.now();
+    const general = generalFuseAll(walls);
+    const generalFuseMs = performance.now() - generalStart;
+    const generalSolidCount = kernel.subShapeCount(general, "solid");
+    const generalVolume = Math.abs(kernel.getVolume(general));
+
+    // BIMBlock needs a true union before tessellation. Until occt-wasm exposes
+    // a native n-ary Boolean union, compare a balanced tree of binary fuses.
+    const unionStart = performance.now();
+    const shell = balancedTrueUnion(walls);
+    const trueUnionMs = performance.now() - unionStart;
+    const trueUnionSolidCount = kernel.subShapeCount(shell, "solid");
+    const trueUnionVolume = Math.abs(kernel.getVolume(shell));
 
     const openings = [
         // south wall door
@@ -85,45 +121,73 @@ function buildRoom(scale) {
     const cutMs = performance.now() - cutStart;
 
     const tessStart = performance.now();
-    const mesh = kernel.tessellate(opened, 0.1, 0.5);
+    const mesh = kernel.tessellate(opened, 0.1 * scale, 0.5);
     const tessellateMs = performance.now() - tessStart;
 
-    const solids = kernel.getSubShapes(opened, "solid");
-    const solidCount = solids.size();
-    for (let i = 0; i < solids.size(); i++) kernel.release(solids.get(i));
-    solids.delete();
+    const expectedShellVolume = 50_880 * scale ** 3;
+    const expectedOpenedVolume = 45_600 * scale ** 3;
+    const openedVolume = Math.abs(kernel.getVolume(opened));
+    const openedSolidCount = kernel.subShapeCount(opened, "solid");
 
     const result = {
         scale,
-        fuseMs,
+        generalFuseMs,
+        generalSolidCount,
+        generalVolume,
+        trueUnionMs,
+        trueUnionSolidCount,
+        trueUnionVolume,
         cutMs,
         tessellateMs,
-        totalKernelMs: fuseMs + cutMs + tessellateMs,
-        volume: Math.abs(kernel.getVolume(opened)),
-        solidCount,
+        totalManufacturingMs: trueUnionMs + cutMs + tessellateMs,
+        expectedShellVolume,
+        expectedOpenedVolume,
+        openedVolume,
+        openedSolidCount,
         triangles: mesh.indexCount / 3,
+        shapeCountPeak: kernel.getShapeCount(),
     };
 
     mesh.delete();
-    kernel.releaseAll();
+    kernel.releaseSince(mark);
+    result.shapeCountAfterRelease = kernel.getShapeCount();
+    result.shapeCountBefore = shapeCountBefore;
     return result;
+}
+
+function relError(actual, expected) {
+    return Math.abs(actual - expected) / Math.max(1, Math.abs(expected));
 }
 
 try {
     console.log("BIMBlock occt-wasm print probe");
     console.log(`WASM init: ${initMs.toFixed(1)} ms`);
-    console.log("All model dimensions are millimetres and Z-up.\n");
+    console.log("All model dimensions are millimetres and Z-up.");
+    console.log("fuseAll is reported separately because it is General Fuse, not true union.\n");
 
-    for (const scale of [1, 10]) {
+    for (const scale of [0.1, 1, 10]) {
         const result = buildRoom(scale);
         console.log(`geometry scale ${scale}x`);
-        console.log(`  fuseAll:     ${result.fuseMs.toFixed(2)} ms`);
-        console.log(`  cutAll:      ${result.cutMs.toFixed(2)} ms`);
-        console.log(`  tessellate:  ${result.tessellateMs.toFixed(2)} ms`);
-        console.log(`  kernel total:${result.totalKernelMs.toFixed(2)} ms`);
-        console.log(`  solids:      ${result.solidCount}`);
-        console.log(`  triangles:   ${result.triangles}`);
-        console.log(`  volume:      ${result.volume.toFixed(3)} mm^3\n`);
+        console.log("  General Fuse (current fuseAll)");
+        console.log(`    time:        ${result.generalFuseMs.toFixed(2)} ms`);
+        console.log(`    solids:      ${result.generalSolidCount}`);
+        console.log(`    volume:      ${result.generalVolume.toFixed(3)} mm^3`);
+        console.log("  True union (balanced binary fuse)");
+        console.log(`    time:        ${result.trueUnionMs.toFixed(2)} ms`);
+        console.log(`    solids:      ${result.trueUnionSolidCount}`);
+        console.log(`    volume:      ${result.trueUnionVolume.toFixed(3)} mm^3`);
+        console.log(`    shell error: ${relError(result.trueUnionVolume, result.expectedShellVolume).toExponential(2)}`);
+        console.log("  Open + tessellate");
+        console.log(`    cutAll:      ${result.cutMs.toFixed(2)} ms`);
+        console.log(`    tessellate:  ${result.tessellateMs.toFixed(2)} ms`);
+        console.log(`    total:       ${result.totalManufacturingMs.toFixed(2)} ms`);
+        console.log(`    solids:      ${result.openedSolidCount}`);
+        console.log(`    triangles:   ${result.triangles}`);
+        console.log(`    volume:      ${result.openedVolume.toFixed(3)} mm^3`);
+        console.log(`    volume error:${relError(result.openedVolume, result.expectedOpenedVolume).toExponential(2)}`);
+        console.log("  Arena");
+        console.log(`    peak handles:${result.shapeCountPeak}`);
+        console.log(`    before/after checkpoint release: ${result.shapeCountBefore}/${result.shapeCountAfterRelease}\n`);
     }
 } finally {
     kernel.releaseAll();
