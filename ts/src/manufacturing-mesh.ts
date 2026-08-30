@@ -12,6 +12,7 @@ export interface WeldedMesh extends IndexedPositionMesh {
 }
 
 export interface ManifoldAnalysis {
+    triangleCount: number;
     edgeCount: number;
     boundaryEdges: number;
     manifoldEdges: number;
@@ -182,6 +183,7 @@ export function weldMeshPositions(
  * exactly two triangles. One use indicates a boundary/hole; more than two uses
  * indicates a non-manifold edge. For a consistently oriented closed mesh, the
  * two triangles sharing an edge must traverse that edge in opposite directions.
+ * An empty mesh is never considered a closed manifold.
  */
 export function analyzeManifoldEdges(indices: Uint32Array): ManifoldAnalysis {
     if (indices.length % 3 !== 0) {
@@ -190,6 +192,7 @@ export function analyzeManifoldEdges(indices: Uint32Array): ManifoldAnalysis {
 
     type EdgeUse = { count: number; forward: number; reverse: number };
     const edgeUse = new Map<string, EdgeUse>();
+    let triangleCount = 0;
     const addEdge = (a: number, b: number): void => {
         const low = Math.min(a, b);
         const high = Math.max(a, b);
@@ -206,6 +209,7 @@ export function analyzeManifoldEdges(indices: Uint32Array): ManifoldAnalysis {
         const b = indices[i + 1]!;
         const c = indices[i + 2]!;
         if (a === b || b === c || c === a) continue;
+        triangleCount++;
         addEdge(a, b);
         addEdge(b, c);
         addEdge(c, a);
@@ -226,8 +230,9 @@ export function analyzeManifoldEdges(indices: Uint32Array): ManifoldAnalysis {
         }
     }
 
-    const isClosedManifold = boundaryEdges === 0 && nonManifoldEdges === 0;
+    const isClosedManifold = triangleCount > 0 && boundaryEdges === 0 && nonManifoldEdges === 0;
     return {
+        triangleCount,
         edgeCount: edgeUse.size,
         boundaryEdges,
         manifoldEdges,
