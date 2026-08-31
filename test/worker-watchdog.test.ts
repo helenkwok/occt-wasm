@@ -82,14 +82,12 @@ describe("runWithWorkerWatchdog", () => {
                 () => new Promise<number>(() => {}),
                 { timeoutMs: 250 },
             );
+            // Attach the rejection handler before advancing fake timers so the
+            // watchdog rejection is never briefly considered unhandled.
+            const observed = pending.catch((error: unknown) => error);
 
             await vi.advanceTimersByTimeAsync(250);
-            let caught: unknown;
-            try {
-                await pending;
-            } catch (error) {
-                caught = error;
-            }
+            const caught = await observed;
 
             expect(caught).toBeInstanceOf(OcctWorkerTimeoutError);
             expect((caught as OcctWorkerTimeoutError).timeoutMs).toBe(250);
@@ -109,10 +107,44 @@ describe("runWithWorkerWatchdog", () => {
                 () => new Promise<number>(() => {}),
                 { timeoutMs: 10 },
             );
+            const observed = pending.catch((error: unknown) => error);
 
             await vi.advanceTimersByTimeAsync(10);
-            await expect(pending).rejects.toBeInstanceOf(OcctWorkerTimeoutError);
+            const caught = await observed;
+
+            expect(caught).toBeInstanceOf(OcctWorkerTimeoutError);
             expect(worker.terminateCalls).toBe(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("absorbs an operation rejection that arrives after timeout", async () => {
+        vi.useFakeTimers();
+        try {
+            const worker = new FakeWorker();
+            let rejectOperation!: (reason?: unknown) => void;
+            const operationPromise = new Promise<number>((_resolve, reject) => {
+                rejectOperation = reject;
+            });
+            const pending = runWithWorkerWatchdog(
+                worker,
+                () => operationPromise,
+                { timeoutMs: 10 },
+            );
+            const observed = pending.catch((error: unknown) => error);
+
+            await vi.advanceTimersByTimeAsync(10);
+            const caught = await observed;
+            expect(caught).toBeInstanceOf(OcctWorkerTimeoutError);
+            expect(worker.terminateCalls).toBe(1);
+
+            // A real Comlink call may reject after Worker termination. The
+            // watchdog's operation chain must already own that rejection so it
+            // cannot surface as an unhandled promise rejection.
+            rejectOperation(new Error("late operation failure"));
+            await Promise.resolve();
+            await Promise.resolve();
         } finally {
             vi.useRealTimers();
         }
