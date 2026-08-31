@@ -18,6 +18,9 @@
 import * as Comlink from "comlink";
 import type { InitOptions, ShapeHandle, Mesh, BoundingBox, Vec3, TessellateOptions, ShapeType, EdgeData, MeshBatchData, ProjectionData, NurbsCurveData, CurvatureData, UVBounds, ShapeOrientation, PointClassification, SurfaceKind, CurveKind, ShapeQueryResult } from "./types.js";
 import type { BooleanOp, TransitionMode } from "./types.js";
+import { installOcctErrorTransferHandler } from "./worker-error-transport.js";
+
+installOcctErrorTransferHandler();
 
 /**
  * Async proxy to an OcctKernel running in a Web Worker.

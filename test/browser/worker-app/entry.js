@@ -1,3 +1,4 @@
+import { OcctError, OcctErrorCode } from "../../../ts/dist/index.js";
 import { OcctWorker } from "../../../ts/dist/worker.js";
 import { prepareManufacturingMesh } from "../../../ts/dist/manufacturing-mesh.js";
 
@@ -17,6 +18,21 @@ try {
     print("Spawning OCCT Worker...");
     worker = await OcctWorker.spawn();
     print("Worker ready.");
+
+    // Structured kernel failures must survive the real Worker + Comlink boundary
+    // as OcctError instances rather than losing code/operation metadata.
+    let structuredError;
+    try {
+        await worker.getVolume(0x7fffffff);
+    } catch (error) {
+        structuredError = error;
+    }
+    assert(structuredError instanceof OcctError,
+        `worker error is ${structuredError?.constructor?.name ?? typeof structuredError}, expected OcctError`);
+    assert(structuredError.operation === "getVolume",
+        `worker error operation ${structuredError.operation}, expected getVolume`);
+    assert(structuredError.code === OcctErrorCode.InvalidShapeId,
+        `worker error code ${structuredError.code}, expected ${OcctErrorCode.InvalidShapeId}`);
 
     const a = await worker.makeBox(20, 10, 10);
     const b0 = await worker.makeBox(20, 10, 10);
@@ -70,6 +86,7 @@ try {
     await worker.release(union);
     await worker.release(generalFuse);
 
+    print(`structured error: ${structuredError.operation}/${structuredError.code}`);
     print(`true union: ${volume.toFixed(1)} volume, ${solidCount} solid`);
     print(`general fuse: ${generalFuseVolume.toFixed(1)} volume, ${generalFuseSolidCount} split solids`);
     print(`mesh: ${mesh.triangleCount} raw triangles, ${prepared.analysis.triangleCount} welded triangles`);
