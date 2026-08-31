@@ -8,25 +8,33 @@ This repository carries an experimental solid-modelling path for browser-based m
 
 For a printable connected component, prefer a true Boolean union before tessellation.
 
-The package therefore exposes compatibility-safe helpers rather than changing `fuseAll()` semantics:
+The package therefore exposes compatibility-safe true-union helpers rather than changing `fuseAll()` semantics:
 
 ```ts
 import {
-  unionAllPairwise,
-  unionAllPairwiseAsync,
+  unionAll,
+  unionAllAsync,
 } from "occt-wasm/union-all";
 ```
 
-Use `unionAllPairwise()` with `OcctKernel`. For arbitrary asynchronous kernel proxies, `unionAllPairwiseAsync()` preserves the same ownership contract.
+Use `unionAll()` with `OcctKernel`. For arbitrary asynchronous kernel proxies, `unionAllAsync()` preserves the same ownership contract. The earlier `unionAllPairwise()` and `unionAllPairwiseAsync()` names remain compatibility aliases; "pairwise" describes the balanced implementation rather than the Boolean semantics.
 
 When using the built-in `OcctWorker`, prefer its single-RPC convenience method:
 
 ```ts
 const worker = await OcctWorker.spawn();
-const result = await worker.unionAllPairwise(shapes);
+const result = await worker.unionAll(shapes);
 ```
 
 That balanced reduction executes entirely inside the Worker beside OCCT, so intermediate handles do not cross the Comlink boundary. All true-union paths preserve caller-owned input handles and reclaim helper-owned intermediates eagerly.
+
+When General Fuse is intentional, the Worker wrapper exposes that semantic name explicitly:
+
+```ts
+const cells = await worker.generalFuse(shapes);
+```
+
+`worker.fuseAll(shapes)` remains available for compatibility and has the same General-Fuse semantics.
 
 ```text
 semantic/model input
@@ -64,7 +72,7 @@ Avoid zero or collapsed dimensions before entering OCCT. Degenerate input is bet
 
 Run heavy B-Rep work in a dedicated Web Worker. The published browser WASM is single-threaded, so a Worker primarily provides UI responsiveness, memory/lifetime isolation and a recovery boundary after a fatal WASM trap.
 
-`unionAllPairwiseAsync()` deliberately awaits each Boolean call rather than issuing concurrent calls against one Worker. One OCCT Worker executes kernel operations on one thread; concurrent RPC submission would not make the Boolean itself multicore and would make ownership/error ordering harder to reason about. The built-in `OcctWorker.unionAllPairwise()` avoids those repeated RPCs by running the same reduction inside the Worker.
+`unionAllAsync()` deliberately awaits each Boolean call rather than issuing concurrent calls against one Worker. One OCCT Worker executes kernel operations on one thread; concurrent RPC submission would not make the Boolean itself multicore and would make ownership/error ordering harder to reason about. The built-in `OcctWorker.unionAll()` avoids those repeated RPCs by running the same reduction inside the Worker.
 
 Re-initializing the built-in Worker now disposes the previous kernel rather than merely clearing its shape arena, so the raw kernel and exception-decoder lifecycle do not accumulate across re-init.
 
