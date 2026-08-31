@@ -90,6 +90,21 @@ try {
     print(`true union: ${volume.toFixed(1)} volume, ${solidCount} solid`);
     print(`general fuse: ${generalFuseVolume.toFixed(1)} volume, ${generalFuseSolidCount} split solids`);
     print(`mesh: ${mesh.triangleCount} raw triangles, ${prepared.analysis.triangleCount} welded triangles`);
+
+    // Normal shutdown should deterministically dispose the kernel before
+    // releasing Comlink proxy state and terminating the Worker. It is safe to
+    // call more than once, and released proxies must no longer be usable.
+    await worker.close();
+    await worker.close();
+    let closedError;
+    try {
+        await worker.makeBox(1, 1, 1);
+    } catch (error) {
+        closedError = error;
+    }
+    assert(closedError instanceof Error, "closed Worker proxy remained usable");
+    print("graceful close: passed");
+
     print("--- ALL PASSED ---");
     result.textContent = "ALL PASSED";
 } catch (error) {
