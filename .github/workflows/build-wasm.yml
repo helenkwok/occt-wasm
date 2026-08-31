@@ -51,8 +51,10 @@ jobs:
           npm run build
           cp ../dist/occt-wasm.js ../dist/occt-wasm.wasm dist/
 
-      - name: Run tests
-        run: npx vitest run
+      # Performance measurements have their own CI job. Keep timing-sensitive
+      # benchmark cases out of the functional correctness gate.
+      - name: Run functional tests
+        run: npx vitest run --exclude test/bench.test.ts
 
       # The suite loads dist/occt-wasm.js directly, so OcctKernel.init()'s
       # dynamic import is only covered here. #271 shipped without it.
