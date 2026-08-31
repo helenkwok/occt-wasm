@@ -19,13 +19,19 @@ function getKernel(): OcctKernel {
     return kernel;
 }
 
+function disposeKernel(): void {
+    if (!kernel) return;
+    kernel[Symbol.dispose]();
+    kernel = null;
+}
+
 const api = {
     async init(options?: InitOptions) {
-        if (kernel) {
-            kernel[Symbol.dispose]();
-            kernel = null;
-        }
+        disposeKernel();
         kernel = await OcctKernel.init(options);
+    },
+    dispose() {
+        disposeKernel();
     },
     get kernel() {
         return Comlink.proxy(getKernel());
@@ -36,6 +42,9 @@ const api = {
     // Backward-compatible algorithm-named alias.
     unionAllPairwise(shapes: ShapeHandle[]) {
         return unionAll(getKernel(), shapes);
+    },
+    [Comlink.finalizer]() {
+        disposeKernel();
     },
 };
 
