@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+    unionAll,
+    unionAllAsync,
     unionAllPairwise,
     unionAllPairwiseAsync,
     type AsyncUnionKernel,
@@ -62,12 +64,12 @@ function asKernel(fake: FakeKernel): OcctKernel {
     return fake as unknown as OcctKernel;
 }
 
-describe("unionAllPairwise ownership", () => {
+describe("unionAll ownership", () => {
     it("uses a balanced tree and never releases caller-owned inputs", () => {
         const fake = new FakeKernel();
         const inputs = [1, 2, 3, 4, 5].map(shape);
 
-        const result = unionAllPairwise(asKernel(fake), inputs);
+        const result = unionAll(asKernel(fake), inputs);
 
         expect(result).toBe(shape(103));
         expect(fake.fuseCalls).toEqual([
@@ -85,7 +87,7 @@ describe("unionAllPairwise ownership", () => {
         fake.failOnFuseCall = 2;
 
         expect(() =>
-            unionAllPairwise(asKernel(fake), [shape(1), shape(2), shape(3), shape(4)]),
+            unionAll(asKernel(fake), [shape(1), shape(2), shape(3), shape(4)]),
         ).toThrow("synthetic fuse failure 2");
 
         expect(fake.released).toEqual([shape(100)]);
@@ -97,7 +99,7 @@ describe("unionAllPairwise ownership", () => {
 
     it("copies a single input so returned ownership is consistent", () => {
         const fake = new FakeKernel();
-        const result = unionAllPairwise(asKernel(fake), [shape(7)]);
+        const result = unionAll(asKernel(fake), [shape(7)]);
 
         expect(result).toBe(shape(100));
         expect(fake.copied).toEqual([shape(7)]);
@@ -107,19 +109,23 @@ describe("unionAllPairwise ownership", () => {
 
     it("rejects empty input without touching the kernel", () => {
         const fake = new FakeKernel();
-        expect(() => unionAllPairwise(asKernel(fake), [])).toThrow(RangeError);
+        expect(() => unionAll(asKernel(fake), [])).toThrow(RangeError);
         expect(fake.fuseCalls).toHaveLength(0);
         expect(fake.released).toHaveLength(0);
         expect(fake.copied).toHaveLength(0);
     });
+
+    it("retains the algorithm-named compatibility alias", () => {
+        expect(unionAllPairwise).toBe(unionAll);
+    });
 });
 
-describe("unionAllPairwiseAsync ownership", () => {
+describe("unionAllAsync ownership", () => {
     it("preserves the same balanced pairing and input ownership over async RPC", async () => {
         const fake = new FakeAsyncKernel();
         const inputs = [1, 2, 3, 4, 5].map(shape);
 
-        const result = await unionAllPairwiseAsync(fake, inputs);
+        const result = await unionAllAsync(fake, inputs);
 
         expect(result).toBe(shape(103));
         expect(fake.fuseCalls).toEqual([
@@ -137,7 +143,7 @@ describe("unionAllPairwiseAsync ownership", () => {
         fake.failOnFuseCall = 2;
 
         await expect(
-            unionAllPairwiseAsync(fake, [shape(1), shape(2), shape(3), shape(4)]),
+            unionAllAsync(fake, [shape(1), shape(2), shape(3), shape(4)]),
         ).rejects.toThrow("synthetic async fuse failure 2");
 
         expect(fake.released).toEqual([shape(100)]);
@@ -149,13 +155,17 @@ describe("unionAllPairwiseAsync ownership", () => {
 
     it("copies one input and rejects empty async input", async () => {
         const fake = new FakeAsyncKernel();
-        await expect(unionAllPairwiseAsync(fake, [shape(9)])).resolves.toBe(shape(100));
+        await expect(unionAllAsync(fake, [shape(9)])).resolves.toBe(shape(100));
         expect(fake.copied).toEqual([shape(9)]);
 
         const untouched = new FakeAsyncKernel();
-        await expect(unionAllPairwiseAsync(untouched, [])).rejects.toThrow(RangeError);
+        await expect(unionAllAsync(untouched, [])).rejects.toThrow(RangeError);
         expect(untouched.fuseCalls).toHaveLength(0);
         expect(untouched.released).toHaveLength(0);
         expect(untouched.copied).toHaveLength(0);
+    });
+
+    it("retains the algorithm-named async compatibility alias", () => {
+        expect(unionAllPairwiseAsync).toBe(unionAllAsync);
     });
 });
