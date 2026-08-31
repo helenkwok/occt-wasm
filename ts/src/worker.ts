@@ -9,7 +9,7 @@
  * const box = await worker.makeBox(10, 20, 30);
  * const mesh = await worker.tessellate(box);
  * console.log(mesh.triangleCount);
- * worker.terminate();
+ * await worker.close();
  * ```
  *
  * @module
@@ -21,6 +21,14 @@ import type { BooleanOp, TransitionMode } from "./types.js";
 import { installOcctErrorTransferHandler } from "./worker-error-transport.js";
 
 installOcctErrorTransferHandler();
+
+function releaseProxyBestEffort(proxy: Comlink.ProxyMethods): void {
+    try {
+        proxy[Comlink.releaseProxy]();
+    } catch {
+        // The proxy may already be released or its endpoint may have failed.
+    }
+}
 
 /**
  * Async proxy to an OcctKernel running in a Web Worker.
@@ -179,6 +187,7 @@ export interface OcctWorkerProxy {
 
 interface OcctWorkerRemoteApi {
     init(options?: InitOptions): Promise<void>;
+    dispose(): void;
     kernel: OcctWorkerProxy;
     unionAll(shapes: ShapeHandle[]): Promise<ShapeHandle>;
     unionAllPairwise(shapes: ShapeHandle[]): Promise<ShapeHandle>;
@@ -190,12 +199,14 @@ interface OcctWorkerRemoteApi {
  */
 export class OcctWorker {
     readonly #worker: Worker;
-    readonly #proxy: OcctWorkerProxy;
+    readonly #proxy: Comlink.Remote<OcctWorkerProxy>;
     readonly #remote: Comlink.Remote<OcctWorkerRemoteApi>;
+    #terminated = false;
+    #closePromise: Promise<void> | null = null;
 
     private constructor(
         worker: Worker,
-        proxy: OcctWorkerProxy,
+        proxy: Comlink.Remote<OcctWorkerProxy>,
         remote: Comlink.Remote<OcctWorkerRemoteApi>,
     ) {
         this.#worker = worker;
@@ -210,11 +221,14 @@ export class OcctWorker {
      * @param options.worker - Optional pre-created Worker instance. If omitted,
      *   a new Worker is created from the built-in worker entry point.
      *
+     * If initialization fails, the partially-created Comlink proxy is released
+     * and the Worker is terminated before the original error is rethrown.
+     *
      * @example
      * ```ts
      * const worker = await OcctWorker.spawn({ wasm: '/occt-wasm.wasm' });
      * const box = await worker.makeBox(10, 20, 30);
-     * worker.terminate();
+     * await worker.close();
      * ```
      */
     static async spawn(options?: InitOptions & { worker?: Worker }): Promise<OcctWorker> {
@@ -225,11 +239,15 @@ export class OcctWorker {
 
         const remote = Comlink.wrap<OcctWorkerRemoteApi>(worker);
 
-        // Initialize the kernel inside the worker
-        await remote.init(options ? { wasm: options.wasm, wasmUrl: options.wasmUrl, wasmPath: options.wasmPath } : undefined);
-
-        const proxy = await remote.kernel;
-        return new OcctWorker(worker, proxy, remote);
+        try {
+            await remote.init(options ? { wasm: options.wasm, wasmUrl: options.wasmUrl, wasmPath: options.wasmPath } : undefined);
+            const proxy = await remote.kernel as Comlink.Remote<OcctWorkerProxy>;
+            return new OcctWorker(worker, proxy, remote);
+        } catch (error) {
+            releaseProxyBestEffort(remote);
+            worker.terminate();
+            throw error;
+        }
     }
 
     /** Access the proxied kernel methods. */
@@ -287,8 +305,38 @@ export class OcctWorker {
     scaleBatch(shapes: ShapeHandle[], params: number[]) { return this.#proxy.scaleBatch(shapes, params); }
     mirrorBatch(shapes: ShapeHandle[], params: number[]) { return this.#proxy.mirrorBatch(shapes, params); }
 
-    /** Terminate the underlying Web Worker. */
+    /**
+     * Gracefully dispose the OCCT kernel in the Worker, release Comlink proxy
+     * state, and terminate the underlying Worker. Repeated calls are safe and
+     * concurrent calls share the same close operation.
+     *
+     * Prefer this for normal lifecycle shutdown. Use {@link terminate} when an
+     * immediate stop is required after a fatal Worker/WASM failure.
+     */
+    close(): Promise<void> {
+        if (this.#terminated) return Promise.resolve();
+        if (this.#closePromise) return this.#closePromise;
+
+        this.#closePromise = (async () => {
+            try {
+                await this.#remote.dispose();
+            } finally {
+                this.terminate();
+            }
+        })();
+        return this.#closePromise;
+    }
+
+    /**
+     * Immediately terminate the Worker. Comlink proxies are released locally on
+     * a best-effort basis, but Worker-side kernel disposal is not awaited.
+     * Prefer {@link close} during normal shutdown.
+     */
     terminate(): void {
+        if (this.#terminated) return;
+        this.#terminated = true;
+        releaseProxyBestEffort(this.#proxy);
+        releaseProxyBestEffort(this.#remote);
         this.#worker.terminate();
     }
 }
