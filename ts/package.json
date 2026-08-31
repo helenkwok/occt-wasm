@@ -12,6 +12,10 @@
       "import": "./dist/worker.js",
       "types": "./dist/worker.d.ts"
     },
+    "./worker-watchdog": {
+      "import": "./dist/worker-watchdog.js",
+      "types": "./dist/worker-watchdog.d.ts"
+    },
     "./union-all": {
       "import": "./dist/union-all.js",
       "types": "./dist/union-all.d.ts"
