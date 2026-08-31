@@ -1,5 +1,5 @@
 import * as Comlink from "comlink";
-import { OcctError, OcctErrorCode } from "./types.js";
+import { OcctError, type OcctErrorCode } from "./types.js";
 
 /** Serialized payload carried by Comlink's existing `throw` transfer channel. */
 interface SerializedOcctError {
