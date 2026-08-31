@@ -34,26 +34,16 @@ function isSerializedOcctError(value: unknown): value is SerializedOcctError {
 }
 
 /**
- * Extend Comlink's built-in thrown-error transfer handler so {@link OcctError}
- * keeps its structured `operation` and `code` fields across a Worker boundary.
+ * Wrap Comlink's existing thrown-value handler. Kept as a separate factory so
+ * the transport contract can be unit-tested without making the repository-root
+ * test package depend directly on Comlink.
  *
- * Comlink 4.x intentionally serializes ordinary Error objects as only
- * `{ message, name, stack }`. We preserve that behaviour for every non-OCCT
- * exception by delegating to the handler that was installed before this one.
- *
- * This function must run in both realms: before `Comlink.expose()` in the
- * Worker and before `Comlink.wrap()` on the caller side. It is idempotent per
- * JavaScript realm.
+ * @internal
  */
-export function installOcctErrorTransferHandler(): void {
-    if (installed) return;
-
-    const original = Comlink.transferHandlers.get("throw");
-    if (!original) {
-        throw new Error("Comlink throw transfer handler is unavailable");
-    }
-
-    const handler: Comlink.TransferHandler<unknown, unknown> = {
+export function createOcctErrorTransferHandler(
+    original: Comlink.TransferHandler<unknown, unknown>,
+): Comlink.TransferHandler<unknown, unknown> {
+    return {
         canHandle(value): value is unknown {
             return original.canHandle(value);
         },
@@ -81,7 +71,28 @@ export function installOcctErrorTransferHandler(): void {
             return original.deserialize(value);
         },
     };
+}
 
-    Comlink.transferHandlers.set("throw", handler);
+/**
+ * Extend Comlink's built-in thrown-error transfer handler so {@link OcctError}
+ * keeps its structured `operation` and `code` fields across a Worker boundary.
+ *
+ * Comlink 4.x intentionally serializes ordinary Error objects as only
+ * `{ message, name, stack }`. We preserve that behaviour for every non-OCCT
+ * exception by delegating to the handler that was installed before this one.
+ *
+ * This function must run in both realms: before `Comlink.expose()` in the
+ * Worker and before `Comlink.wrap()` on the caller side. It is idempotent per
+ * JavaScript realm.
+ */
+export function installOcctErrorTransferHandler(): void {
+    if (installed) return;
+
+    const original = Comlink.transferHandlers.get("throw");
+    if (!original) {
+        throw new Error("Comlink throw transfer handler is unavailable");
+    }
+
+    Comlink.transferHandlers.set("throw", createOcctErrorTransferHandler(original));
     installed = true;
 }
