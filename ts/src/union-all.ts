@@ -3,14 +3,14 @@ import type { ShapeHandle } from "./types.js";
 
 type UnionEntry = { shape: ShapeHandle; owned: boolean };
 
-/** Minimal synchronous kernel surface required by {@link unionAllPairwise}. */
+/** Minimal synchronous kernel surface required by {@link unionAll}. */
 export interface UnionKernel {
     fuse(a: ShapeHandle, b: ShapeHandle): ShapeHandle;
     copy(shape: ShapeHandle): ShapeHandle;
     release(shape: ShapeHandle): void;
 }
 
-/** Minimal asynchronous kernel surface required by {@link unionAllPairwiseAsync}. */
+/** Minimal asynchronous kernel surface required by {@link unionAllAsync}. */
 export interface AsyncUnionKernel {
     fuse(a: ShapeHandle, b: ShapeHandle): Promise<ShapeHandle>;
     copy(shape: ShapeHandle): Promise<ShapeHandle>;
@@ -23,8 +23,8 @@ export interface AsyncUnionKernel {
  *
  * This is intentionally separate from `OcctKernel.fuseAll()`: the current raw
  * `fuseAll()` implementation is OCCT General Fuse (`BRepAlgoAPI_BuilderAlgo`),
- * which returns split argument cells rather than a manufacturing union with
- * internal interfaces removed.
+ * which returns split argument cells rather than a true N-way Boolean union
+ * with internal overlap interfaces removed.
  *
  * The balanced tree keeps Boolean depth logarithmic and releases intermediate
  * results as soon as their parent result has been created. Caller-owned input
@@ -34,14 +34,21 @@ export interface AsyncUnionKernel {
  * If a fuse step throws, every intermediate handle created by this helper is
  * released before the error is rethrown.
  *
+ * @example
+ * ```ts
+ * import { unionAll } from "occt-wasm/union-all";
+ *
+ * const result = unionAll(kernel, [a, b, c, d]);
+ * ```
+ *
  * @throws if `shapes` is empty or an underlying Boolean fuse fails.
  */
-export function unionAllPairwise(
+export function unionAll(
     kernel: UnionKernel | OcctKernel,
     shapes: readonly ShapeHandle[],
 ): ShapeHandle {
     if (shapes.length === 0) {
-        throw new RangeError("unionAllPairwise: no shapes provided");
+        throw new RangeError("unionAll: no shapes provided");
     }
     if (shapes.length === 1) {
         return kernel.copy(shapes[0]!);
@@ -96,7 +103,7 @@ export function unionAllPairwise(
 }
 
 /**
- * Async counterpart of {@link unionAllPairwise} for Worker/Comlink proxies.
+ * Async counterpart of {@link unionAll} for Worker/Comlink proxies.
  *
  * The ownership contract is identical to the synchronous helper: caller-owned
  * inputs are never released, helper-owned intermediates are reclaimed eagerly,
@@ -105,23 +112,26 @@ export function unionAllPairwise(
  * on a single thread; issuing concurrent RPCs would not make the kernel itself
  * parallel and would complicate deterministic handle ownership.
  *
+ * For the built-in `OcctWorker`, prefer `worker.unionAll(shapes)`: it performs
+ * the same balanced reduction entirely inside the Worker in one RPC.
+ *
  * @example
  * ```ts
- * import { unionAllPairwiseAsync } from "occt-wasm/union-all";
+ * import { unionAllAsync } from "occt-wasm/union-all";
  * import { OcctWorker } from "occt-wasm/worker";
  *
  * const worker = await OcctWorker.spawn();
- * const result = await unionAllPairwiseAsync(worker.kernel, shapes);
+ * const result = await unionAllAsync(worker.kernel, shapes);
  * ```
  *
  * @throws if `shapes` is empty or an underlying Boolean fuse fails.
  */
-export async function unionAllPairwiseAsync(
+export async function unionAllAsync(
     kernel: AsyncUnionKernel,
     shapes: readonly ShapeHandle[],
 ): Promise<ShapeHandle> {
     if (shapes.length === 0) {
-        throw new RangeError("unionAllPairwiseAsync: no shapes provided");
+        throw new RangeError("unionAllAsync: no shapes provided");
     }
     if (shapes.length === 1) {
         return kernel.copy(shapes[0]!);
@@ -174,3 +184,14 @@ export async function unionAllPairwiseAsync(
         throw error;
     }
 }
+
+/**
+ * Compatibility alias for {@link unionAll}.
+ *
+ * The implementation is still a balanced pairwise reduction; the shorter
+ * `unionAll()` name describes the Boolean semantics rather than the algorithm.
+ */
+export const unionAllPairwise = unionAll;
+
+/** Compatibility alias for {@link unionAllAsync}. */
+export const unionAllPairwiseAsync = unionAllAsync;

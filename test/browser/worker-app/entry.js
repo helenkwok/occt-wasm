@@ -23,13 +23,24 @@ try {
     const b = await worker.translate(b0, 10, 0, 0);
     await worker.release(b0);
 
-    const union = await worker.unionAllPairwise([a, b]);
+    const union = await worker.unionAll([a, b]);
     const volume = await worker.getVolume(union);
     assert(Math.abs(volume - 3000) < 1e-6, `union volume ${volume}, expected 3000`);
 
     const solidCount = await worker.kernel.subShapeCount(union, "solid");
     assert(solidCount === 1, `union returned ${solidCount} solids, expected 1`);
     assert(await worker.kernel.isValid(union), "union B-Rep is invalid");
+
+    // General Fuse preserves split cells rather than collapsing the overlap
+    // into one topological solid. This is the semantic distinction the public
+    // API names are intended to make explicit.
+    const generalFuse = await worker.generalFuse([a, b]);
+    const generalFuseVolume = await worker.getVolume(generalFuse);
+    const generalFuseSolidCount = await worker.kernel.subShapeCount(generalFuse, "solid");
+    assert(Math.abs(generalFuseVolume - 3000) < 1e-6,
+        `general-fuse volume ${generalFuseVolume}, expected 3000`);
+    assert(generalFuseSolidCount > 1,
+        `general fuse returned ${generalFuseSolidCount} solid(s), expected split cells`);
 
     // The true-union helper must never release caller-owned input handles.
     const volumeA = await worker.getVolume(a);
@@ -57,8 +68,10 @@ try {
     await worker.release(a);
     await worker.release(b);
     await worker.release(union);
+    await worker.release(generalFuse);
 
     print(`true union: ${volume.toFixed(1)} volume, ${solidCount} solid`);
+    print(`general fuse: ${generalFuseVolume.toFixed(1)} volume, ${generalFuseSolidCount} split solids`);
     print(`mesh: ${mesh.triangleCount} raw triangles, ${prepared.analysis.triangleCount} welded triangles`);
     print("--- ALL PASSED ---");
     result.textContent = "ALL PASSED";

@@ -47,6 +47,7 @@ export interface OcctWorkerProxy {
     common(a: ShapeHandle, b: ShapeHandle): Promise<ShapeHandle>;
     intersect(a: ShapeHandle, b: ShapeHandle): Promise<ShapeHandle>;
     section(a: ShapeHandle, b: ShapeHandle): Promise<ShapeHandle>;
+    /** OCCT General Fuse: mutually split all arguments and keep the resulting cells. */
     fuseAll(shapes: ShapeHandle[]): Promise<ShapeHandle>;
     cutAll(shape: ShapeHandle, tools: ShapeHandle[]): Promise<ShapeHandle>;
     split(shape: ShapeHandle, tools: ShapeHandle[]): Promise<ShapeHandle>;
@@ -176,6 +177,7 @@ export interface OcctWorkerProxy {
 interface OcctWorkerRemoteApi {
     init(options?: InitOptions): Promise<void>;
     kernel: OcctWorkerProxy;
+    unionAll(shapes: ShapeHandle[]): Promise<ShapeHandle>;
     unionAllPairwise(shapes: ShapeHandle[]): Promise<ShapeHandle>;
 }
 
@@ -233,10 +235,22 @@ export class OcctWorker {
     }
 
     /**
-     * Compute a true Boolean union entirely inside the worker in a single RPC.
-     * This avoids transferring intermediate handles across the Comlink boundary.
+     * Compute a true N-way Boolean union entirely inside the Worker in one RPC.
+     * Caller-owned inputs remain valid; the returned handle is caller-owned.
      */
-    unionAllPairwise(shapes: ShapeHandle[]) { return this.#remote.unionAllPairwise(shapes); }
+    unionAll(shapes: ShapeHandle[]) { return this.#remote.unionAll(shapes); }
+
+    /** Compatibility alias for {@link unionAll}. */
+    unionAllPairwise(shapes: ShapeHandle[]) { return this.unionAll(shapes); }
+
+    /**
+     * OCCT General Fuse: mutually split all arguments and keep the resulting
+     * cells. This is intentionally different from {@link unionAll}.
+     */
+    generalFuse(shapes: ShapeHandle[]) { return this.#proxy.fuseAll(shapes); }
+
+    /** Existing General-Fuse name retained for compatibility. */
+    fuseAll(shapes: ShapeHandle[]) { return this.#proxy.fuseAll(shapes); }
 
     // Delegate commonly used methods directly for convenience
     makeBox(dx: number, dy: number, dz: number) { return this.#proxy.makeBox(dx, dy, dz); }

@@ -7,7 +7,7 @@
 import * as Comlink from "comlink";
 import type { InitOptions, ShapeHandle } from "./types.js";
 import { OcctKernel } from "./index.js";
-import { unionAllPairwise } from "./union-all.js";
+import { unionAll } from "./union-all.js";
 
 let kernel: OcctKernel | null = null;
 
@@ -27,8 +27,12 @@ const api = {
     get kernel() {
         return Comlink.proxy(getKernel());
     },
+    unionAll(shapes: ShapeHandle[]) {
+        return unionAll(getKernel(), shapes);
+    },
+    // Backward-compatible algorithm-named alias.
     unionAllPairwise(shapes: ShapeHandle[]) {
-        return unionAllPairwise(getKernel(), shapes);
+        return unionAll(getKernel(), shapes);
     },
 };
 

@@ -2,7 +2,7 @@
 
 | Area | Status | Relevance | Mitigation |
 | --- | --- | --- | --- |
-| `fuseAll()` General Fuse semantics | Current API concern | High for manufacturing union | Use explicit pairwise true union or add a separately named native union API |
+| `fuseAll()` General Fuse semantics | Known compatibility concern | High when callers expect a true N-way union | Preserve `fuseAll()` behavior; prefer canonical `unionAll()` / `worker.unionAll()` for true union and `worker.generalFuse()` when split-cell topology is intentional |
 | Rounded-profile Boolean slowdown on OCCT 8.0.1 | Accepted trade-off | Medium; workload-dependent | Benchmark representative geometry; do not restore unsafe sampling shortcut |
 | Single-threaded browser WASM | Current architecture | Medium | Run kernel off-main-thread; measure before using multiple Workers |
 | WASM memory growth to 4 GiB ceiling | Current architecture | Medium/high for large models | Scope jobs, release handles deterministically, terminate Worker after job/trap/OOM |
