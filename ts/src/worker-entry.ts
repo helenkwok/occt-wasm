@@ -8,6 +8,9 @@ import * as Comlink from "comlink";
 import type { InitOptions, ShapeHandle } from "./types.js";
 import { OcctKernel } from "./index.js";
 import { unionAll } from "./union-all.js";
+import { installOcctErrorTransferHandler } from "./worker-error-transport.js";
+
+installOcctErrorTransferHandler();
 
 let kernel: OcctKernel | null = null;
 
