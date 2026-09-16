@@ -1,5 +1,9 @@
 import { OcctError, OcctErrorCode } from "../../../ts/dist/index.js";
 import { OcctWorker } from "../../../ts/dist/worker.js";
+import {
+    OcctWorkerAbortError,
+    runWithWorkerWatchdog,
+} from "../../../ts/dist/worker-watchdog.js";
 import { prepareManufacturingMesh } from "../../../ts/dist/manufacturing-mesh.js";
 
 const log = document.getElementById("log");
@@ -38,6 +42,34 @@ try {
     const b0 = await worker.makeBox(20, 10, 10);
     const b = await worker.translate(b0, 10, 0, 0);
     await worker.release(b0);
+
+    // The watchdog wraps real Worker calls without changing their successful
+    // result. A signal that is already aborted rejects before work begins and
+    // therefore must not terminate an otherwise healthy Worker.
+    const guardedVolume = await runWithWorkerWatchdog(
+        worker,
+        () => worker.getVolume(a),
+        { timeoutMs: 5_000 },
+    );
+    assert(Math.abs(guardedVolume - 2000) < 1e-6,
+        `guarded volume ${guardedVolume}, expected 2000`);
+
+    const alreadyAborted = new AbortController();
+    alreadyAborted.abort();
+    let watchdogAbort;
+    try {
+        await runWithWorkerWatchdog(
+            worker,
+            () => worker.getVolume(a),
+            { signal: alreadyAborted.signal },
+        );
+    } catch (error) {
+        watchdogAbort = error;
+    }
+    assert(watchdogAbort instanceof OcctWorkerAbortError,
+        `watchdog abort is ${watchdogAbort?.constructor?.name ?? typeof watchdogAbort}, expected OcctWorkerAbortError`);
+    assert(Math.abs(await worker.getVolume(a) - 2000) < 1e-6,
+        "already-aborted watchdog unexpectedly terminated the Worker");
 
     const union = await worker.unionAll([a, b]);
     const volume = await worker.getVolume(union);
@@ -87,6 +119,7 @@ try {
     await worker.release(generalFuse);
 
     print(`structured error: ${structuredError.operation}/${structuredError.code}`);
+    print(`watchdog: guarded ${guardedVolume.toFixed(1)} volume, pre-abort preserved Worker`);
     print(`true union: ${volume.toFixed(1)} volume, ${solidCount} solid`);
     print(`general fuse: ${generalFuseVolume.toFixed(1)} volume, ${generalFuseSolidCount} split solids`);
     print(`mesh: ${mesh.triangleCount} raw triangles, ${prepared.analysis.triangleCount} welded triangles`);
